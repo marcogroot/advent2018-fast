@@ -1,116 +1,171 @@
 #include "advent2018.h"
-
-static constexpr size_t LEN = 27;
+#include <arm_neon.h>
 
 namespace {
 
-union va_t {
-	__m256i v;
-	uint8_t a[32];
-	va_t(__m256i v = _mm256_setzero_si256()) : v(v) { }
-	operator const __m256i & () const { return v; }
+constexpr size_t LEN = 27;
+constexpr uint32_t TBITS = 10;
+constexpr uint32_t TSIZE = 1u << TBITS;
+
+inline uint64_t load64(const char *p) {
+	uint64_t x;
+	memcpy(&x, p, 8);
+	return x;
+}
+
+inline int single_diff(const char *a, const char *b) {
+	uint8x16_t eq0 = vceqq_u8(vld1q_u8((const uint8_t *)a), vld1q_u8((const uint8_t *)b));
+	uint8x16_t eq1 = vceqq_u8(vld1q_u8((const uint8_t *)a + 16), vld1q_u8((const uint8_t *)b + 16));
+	uint64_t m0 = ~vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(eq0), 4)), 0);
+	uint64_t m1 = ~vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(eq1), 4)), 0) & 0xffffffffffull;
+	uint64_t m = m0 ? m0 : m1;
+	if ((m0 && m1) || !m) return -1;
+	int bit = __builtin_ctzll(m) & ~3;
+	if (m != (0xfull << bit)) return -1;
+	return (bit >> 2) + (m0 ? 0 : 16);
+}
+
+inline void count_word(const char *s, int &n_two, int &n_three) {
+	uint32_t s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+	for (int k = 0; k < 26; k++) {
+		uint32_t b = 1u << (s[k] & 31);
+		s4 |= s3 & b;
+		s3 |= s2 & b;
+		s2 |= s1 & b;
+		s1 |= b;
+	}
+	n_two += (s2 & ~s3) != 0;
+	n_three += (s3 & ~s4) != 0;
+}
+
+struct Matcher {
+	static constexpr uint64_t L1 = 0x0001000100010001ull, H = 0x8000800080008000ull;
+	const char *base;
+	const char *ans = nullptr;
+	int diff_idx = 0;
+	alignas(64) uint64_t tags[TSIZE];
+	uint16_t idxs[TSIZE * 4];
+
+	explicit Matcher(const char *base) : base(base) {
+		memset(tags, 0, sizeof(tags));
+	}
+
+	bool insert_word(size_t i) {
+		static constexpr int OFF[4] = { 0, 7, 13, 20 };
+		static constexpr uint64_t MASK[4] = { 0xffffffffffffffull, 0xffffffffffffull, 0xffffffffffffffull, 0xffffffffffffull };
+		static constexpr uint64_t MUL[4] = { 0x9e3779b97f4a7c15ull, 0xc2b2ae3d27d4eb4full, 0x165667b19e3779f9ull, 0xd6e8feb86659fd93ull };
+		const char *s = base + i * LEN;
+		uint64_t hp[4], tot = 0;
+		for (int k = 0; k < 4; k++) {
+			hp[k] = (load64(s + OFF[k]) & MASK[k]) * MUL[k];
+			tot += hp[k];
+		}
+		for (int k = 0; k < 4; k++) {
+			uint64_t h = (tot - hp[k]) * 0xff51afd7ed558ccdull;
+			uint32_t bucket = (uint32_t)(h >> (64 - TBITS));
+			uint64_t tag = ((h >> 16) & 0xffff) | 0x8000u;
+			uint64_t tagv = tag * L1;
+			for (;;) {
+				uint64_t bv = tags[bucket];
+				uint64_t x = bv ^ tagv;
+				uint64_t tm = (x - L1) & ~x & H;
+				uint64_t em = ~bv & H;
+				if (__builtin_expect(tm != 0, 0)) {
+					do {
+						int lane = __builtin_ctzll(tm) >> 4;
+						const char *t = base + idxs[bucket * 4 + lane] * LEN;
+						int d = single_diff(t, s);
+						if (d >= 0) {
+							ans = t;
+							diff_idx = d;
+							return true;
+						}
+						tm &= tm - 1;
+					} while (tm);
+				}
+				if (__builtin_expect(em != 0, 1)) {
+					int lane = __builtin_ctzll(em) >> 4;
+					tags[bucket] = bv | (tag << (lane * 16));
+					idxs[bucket * 4 + lane] = (uint16_t)i;
+					break;
+				}
+				bucket = (bucket + 1) & (TSIZE - 1);
+			}
+		}
+		return false;
+	}
 };
 
 }
 
-static uint64_t hash(const __m256i &m);
-
 void day02(input_t input) {
-	std::vector<va_t> v;
-	for (; (input.len -= LEN) >= 0; input.s += LEN) {
-		v.push_back({});
-		memcpy(&v.back(), input.s, LEN);
-		v.back().a[LEN - 1] = 0;
-	}
+	const char *base = input.s;
+	size_t n = input.len >= 0 ? (size_t)input.len / LEN : 0;
 
-	/* Part 1 */
-	int n_two = 0, n_three = 0;
-	for (auto &&n : v) {
-		va_t tmp = _mm256_and_si256(n, _mm256_set1_epi8(31));
-		va_t counts;
-		for (auto p = tmp.a, e = p + LEN - 1; p != e; p++) {
-			counts.a[*p]++;
+	Matcher mt(base);
+	bool found = false;
+
+	uint32x4_t acc2 = vdupq_n_u32(0), acc3 = vdupq_n_u32(0);
+	const uint32x4_t one = vdupq_n_u32(1);
+	const uint8x16_t k97 = vdupq_n_u8(97);
+	size_t i = 0;
+	for (; i + 4 <= n; i += 4) {
+		const uint8_t *p = (const uint8_t *)base + i * LEN;
+		uint32x4_t r[4][2];
+		for (int w = 0; w < 4; w++) {
+			r[w][0] = vreinterpretq_u32_u8(vsubq_u8(vld1q_u8(p + w * LEN), k97));
+			r[w][1] = vreinterpretq_u32_u8(vsubq_u8(vld1q_u8(p + w * LEN + 16), k97));
 		}
-		n_two += !!_mm256_movemask_epi8(
-				_mm256_cmpeq_epi8(counts,
-					_mm256_set1_epi8(2)));
-		n_three += !!_mm256_movemask_epi8(
-				_mm256_cmpeq_epi8(counts,
-					_mm256_set1_epi8(3)));
-	}
-	auto part1 = n_two * n_three;
-
-	/* Part 2 */
-	// Hash two disjoint sections of each input word, and create a
-	// vector of the hashes and array indices
-	std::vector<uint64_t> hv;
-	hv.reserve(v.size());
-	for (size_t i = 0; i < v.size(); i++) {
-		auto h0 = hash(_mm256_and_si256(v[i],
-					_mm256_set1_epi16(0x00ff)));
-		auto h1 = hash(_mm256_and_si256(v[i],
-					_mm256_set1_epi16(0xff00)));
-		hv.emplace_back((h0 << 32) | i);
-		hv.emplace_back((h1 << 32) | i);
-	}
-
-	// Sort 'hv' by hash value using a 3-pass histogram sort
-	std::vector<uint64_t> hv_tmp(hv.size());
-	std::array<uint32_t, 2048> hist;
-	for (int shift : { 32, 43, 54 }) {
-		uint32_t total = 0;
-		hist.fill(0);
-		for (auto h : hv) hist[(h >> shift) & 0x3ff]++;
-		for (auto &n : hist) total += std::exchange(n, total);
-		for (auto h : hv) hv_tmp[hist[(h >> shift) & 0x3ff]++] = h;
-		hv.swap(hv_tmp);
-	}
-
-	// Collect indexes for hashes that appear more than once
-	std::vector<uint32_t> idxv;
-	for (size_t i = 1; i < hv.size(); i++) {
-		if ((hv[i - 1] >> 32) == (hv[i] >> 32)) {
-			idxv.emplace_back(hv[i - 1]);
-			idxv.emplace_back(hv[i]);
+		uint32x4_t col[8];
+		for (int h = 0; h < 2; h++) {
+			uint32x4_t t0 = vtrn1q_u32(r[0][h], r[1][h]);
+			uint32x4_t t1 = vtrn2q_u32(r[0][h], r[1][h]);
+			uint32x4_t t2 = vtrn1q_u32(r[2][h], r[3][h]);
+			uint32x4_t t3 = vtrn2q_u32(r[2][h], r[3][h]);
+			col[h * 4 + 0] = vreinterpretq_u32_u64(vtrn1q_u64(vreinterpretq_u64_u32(t0), vreinterpretq_u64_u32(t2)));
+			col[h * 4 + 1] = vreinterpretq_u32_u64(vtrn1q_u64(vreinterpretq_u64_u32(t1), vreinterpretq_u64_u32(t3)));
+			col[h * 4 + 2] = vreinterpretq_u32_u64(vtrn2q_u64(vreinterpretq_u64_u32(t0), vreinterpretq_u64_u32(t2)));
+			col[h * 4 + 3] = vreinterpretq_u32_u64(vtrn2q_u64(vreinterpretq_u64_u32(t1), vreinterpretq_u64_u32(t3)));
 		}
-	}
-
-	// Sort and deduplicate the index list; this also ensures the
-        // candidates remain in the same relative order
-        std::sort(idxv.begin(), idxv.end());
-        idxv.erase(std::unique(idxv.begin(), idxv.end()), idxv.end());
-
-	// Remove all non-candidates from the input list
-	decltype(v) vv;
-	size_t new_size = 0;
-	for (auto idx : idxv) {
-		vv.emplace_back(v[idx]);
-	}
-
-	for (auto x = vv.begin(); x != vv.end(); x++) {
-		for (auto y = x + 1; y != vv.end(); y++) {
-			// Parallel compare 8x32 vector, convert to bitmask of differences
-			auto cmp_ne = ~_mm256_movemask_epi8(_mm256_cmpeq_epi8(*x, *y));
-			// Get lowest bit in difference mask
-			auto diff1 = _blsi_u32(cmp_ne);
-			// Was it the only difference?
-			if (diff1 == cmp_ne) {
-				auto s = reinterpret_cast<char *>(&*x);
-				// Get the index of the difference
-				auto diff_idx = _bit_scan_forward(diff1);
-				// Output all but the difference
-				printf("Day 02 Part 1: %u\nDay 02 Part 2: %.*s%s\n", part1, diff_idx, s, s + diff_idx + 1);
-				return;
+		uint32x4_t s1 = vdupq_n_u32(0), s2 = s1, s3 = s1, s4 = s1;
+		auto step = [&](uint32x4_t x) {
+			uint32x4_t b = vshlq_u32(one, vreinterpretq_s32_u32(x));
+			s4 = vbslq_u32(b, s3, s4);
+			s3 = vbslq_u32(b, s2, s3);
+			s2 = vbslq_u32(b, s1, s2);
+			s1 = vorrq_u32(s1, b);
+		};
+		for (int c = 0; c < 7; c++) {
+			uint32x4_t x = col[c];
+			step(x);
+			step(vshrq_n_u32(x, 8));
+			if (c < 6) {
+				step(vshrq_n_u32(x, 16));
+				step(vshrq_n_u32(x, 24));
+			}
+		}
+		uint32x4_t t2 = vbicq_u32(s2, s3), t3 = vbicq_u32(s3, s4);
+		acc2 = vsubq_u32(acc2, vtstq_u32(t2, t2));
+		acc3 = vsubq_u32(acc3, vtstq_u32(t3, t3));
+		if (!found) {
+			for (size_t w = i; w < i + 4; w++) {
+				if (mt.insert_word(w)) {
+					found = true;
+					break;
+				}
 			}
 		}
 	}
-}
-
-uint64_t hash(const __m256i &m) {
-	auto u64 = reinterpret_cast<const uint64_t *>(&m);
-	uint64_t h = 0;
-	for (int i = 0; i < 4; i++) {
-		h = _mm_crc32_u64(h, u64[i]);
+	int n_two = vaddvq_u32(acc2), n_three = vaddvq_u32(acc3);
+	for (; i < n; i++) {
+		count_word(base + i * LEN, n_two, n_three);
+		if (!found && mt.insert_word(i)) found = true;
 	}
-	return h;
+	int part1 = n_two * n_three;
+
+	if (found) {
+		const char *ans = mt.ans;
+		int diff_idx = mt.diff_idx;
+		printf("Day 02 Part 1: %u\nDay 02 Part 2: %.*s%.*s\n", part1, diff_idx, ans, 25 - diff_idx, ans + diff_idx + 1);
+	}
 }

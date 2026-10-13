@@ -1,3 +1,47 @@
+# advent2018-fast (Apple M4 Max experiment)
+
+Experimenting with **Claude Opus 5.5** to speed up an already heavily optimized repo: [Voltara/advent2018-fast](https://github.com/Voltara/advent2018-fast).
+The original is AVX2 C++ for x86. This fork builds it natively on arm64 (via SIMDe as a baseline), then has one agent per day rewrite each solution for the M4 Max.
+
+## Comparison (Apple M4 Max, single-threaded, min over many runs)
+
+| Day | Original x86 (Rosetta) | Original native arm64 (SIMDe) | Optimized (Opus 5.5) | Speedup vs native |
+|----:|---:|---:|---:|---:|
+|  1 | 13.7 μs | 10.8 μs | **2.3 μs** | 4.7x |
+|  2 | 12.6 μs | 9.7 μs | **1.4 μs** | 6.9x |
+|  3 | 83.4 μs | 53.8 μs | **26.0 μs** | 2.1x |
+|  4 | 30.0 μs | 27.0 μs | **2.1 μs** | 12.9x |
+|  5 | 246.5 μs | 213.5 μs | **26.2 μs** | 8.1x |
+|  6 | 405.5 μs | 374.1 μs | **5.6 μs** | 66.8x |
+|  7 | 0.9 μs | 0.5 μs | **0.2 μs** | 2.5x |
+|  8 | 26.1 μs | 24.3 μs | **6.2 μs** | 3.9x |
+|  9 | 1,204.4 μs | 1,813.4 μs | **274.4 μs** | 6.6x |
+| 10 | 12.6 μs | 8.4 μs | **0.8 μs** | 10.5x |
+| 11 | 990.1 μs | 617.0 μs | **117.1 μs** | 5.3x |
+| 12 | 42.0 μs | 42.4 μs | **2.1 μs** | 20.2x |
+| 13 | 203.0 μs | 188.8 μs | **36.5 μs** | 5.2x |
+| 14 | 30,853.0 μs | 47,265.0 μs | **2,281.8 μs** | 20.7x |
+| 15 | 6,472.2 μs | 1,755.5 μs | **597.0 μs** | 2.9x |
+| 16 | 43.3 μs | 39.3 μs | **4.1 μs** | 9.6x |
+| 17 | 552.4 μs | 303.9 μs | **24.2 μs** | 12.6x |
+| 18 | 1,044.0 μs | 326.1 μs | **25.7 μs** | 12.7x |
+| 19 | 0.6 μs | 0.4 μs | **0.2 μs** | 2.0x |
+| 20 | 67.5 μs | 18.5 μs | **11.6 μs** | 1.6x |
+| 21 | 52.6 μs | 53.4 μs | **23.2 μs** | 2.3x |
+| 22 | 2,786.5 μs | 1,844.2 μs | **73.8 μs** | 25.0x |
+| 23 | 125.7 μs | 93.1 μs | **17.5 μs** | 5.3x |
+| 24 | 4,798.3 μs | 3,646.6 μs | **1,911.1 μs** | 1.9x |
+| 25 | 264.7 μs | 164.9 μs | **9.2 μs** | 17.9x |
+| **Total** | **50,331.6 μs** | **58,894.6 μs** | **5,480.3 μs** | **10.7x** |
+
+Overall: **9.2x faster** than the original x86 code under Rosetta and **10.7x faster** than the original built natively for arm64.
+
+Correctness: every day is checked against the original code's answers on 205 public puzzle inputs from ~27 people (`./verify.sh`), plus randomized fuzz inputs for several days. Inputs are not committed. One bug in the original was found along the way: day 14 prints `1111111111` for Part 1 whenever the Part 2 answer is smaller than the input; the optimized version prints the correct value.
+
+Build and run: `./build.sh` then `build/bench all -q` (native), or `ARCH=x86 ./build.sh build/bench-x86` for the Rosetta build.
+
+---
+
 # advent2018-fast
 
 [Advent of Code 2018](http://adventofcode.com/2018/) optimized C++ solutions.
