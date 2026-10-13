@@ -1,109 +1,261 @@
 #include "advent2018.h"
+#include <arm_neon.h>
 
-// Recipes 0..22 precomputed
-static constexpr std::array<uint8_t, 23> BASE = {
+namespace {
+
+constexpr uint8_t BASE[23] = {
 	3,7,1,0,1,0,1,2,4,5,1,5,8,9,1,6,7,7,9,2,5,1,0 };
 
-/* Precomputed ingredient sequences for starting offsets 0..8,
- * up to (but not including) offset 23 where they all converge.
- *   Example: 0xfff94113 is the sequence [ 3, 1, 1, 4, 9 ].
- * Upper nibbles are filled with 0xf, so that when all values
- * have been shifted right, the value becomes -1 (0xffffffff)
- */
-static constexpr std::array<uint32_t, 9> PREMIX = {
+constexpr uint32_t PREMIX[9] = {
 	0xfff94113, 0xffff0657, 0xfff94111, 0xfff94110, 0xffff9411,
 	0xffff9410, 0xfffff941, 0xffff1812, 0xffffff94 };
 
-/* NOTE: To keep the pattern matching code from being unnecessarily
- * complex, this supports only inputs of exactly length 6.
- */
-static constexpr size_t INPUT_LEN = 6;
+constexpr size_t INPUT_LEN = 6;
 
-/* Preallocated arrays for mixers and recipes.  Should be enough
- * to handle any of the inputs given.  Mixers can be increased
- * without penalty; recipes needs to be prefilled with ones, so
- * there is a speed penalty for making it too large.
- */
-static constexpr size_t MIXERS_MEM  =  8 << 20;
-static constexpr size_t RECIPES_MEM = 22 << 20;
+constexpr size_t MIXERS_MEM  =  8 << 20;
+constexpr size_t RECIPES_MEM = 22 << 20;
+constexpr size_t GENERATE_LIMIT = RECIPES_MEM - (64 * 256);
 
-/* The loop termination condition is checked at intervals within
- * the vectorized middle loop.  Therefore, there needs to be enough
- * 'recipes' memory to hold the new values appended between checks.
- */
-static constexpr size_t CHECK_INTERVAL = 1 << 8;
-static constexpr size_t GENERATE_LIMIT = RECIPES_MEM - (64 * CHECK_INTERVAL);
+constexpr size_t WIN_USE = 1 << 16;
+constexpr size_t WIN_CAP = 1 << 19;
+constexpr size_t CHUNK = 4096;
+constexpr int PK = 12;
+constexpr int PU = 2;
+
+struct ExpandTables {
+	uint8_t lo[256][16];
+	uint8_t hi[256][16];
+	uint8_t len[256];
+};
+
+constexpr ExpandTables make_tables() {
+	ExpandTables t{};
+	for (int m = 0; m < 256; m++) {
+		int j = 0;
+		for (int i = 0; i < 8; i++) {
+			if (m & (1 << i)) {
+				t.lo[m][j] = 0x80;
+				t.hi[m][j] = 0x80;
+				j++;
+			}
+			t.lo[m][j] = i;
+			t.hi[m][j] = i + 8;
+			j++;
+		}
+		t.len[m] = j;
+		for (; j < 16; j++) {
+			t.lo[m][j] = 0x80;
+			t.hi[m][j] = 0x80;
+		}
+	}
+	return t;
+}
+
+constexpr ExpandTables TAB = make_tables();
+
+template <int K, int U>
+size_t propagate(const uint8_t *r, size_t p, size_t end, uint8_t *&out, uint8_t *tmp) {
+	size_t len = end - p;
+	if (len < 128 * K) {
+		uint8_t *o = out;
+		do {
+			uint8_t d = r[p];
+			*o++ = d;
+			p += d + 1;
+		} while (p < end);
+		out = o;
+		return p;
+	}
+	const uint8_t *b[K + 1];
+	for (int k = 0; k <= K; k++) {
+		b[k] = r + p + len * k / K;
+	}
+	const uint8_t *q[K];
+	uint8_t *o[K];
+	uint8_t *src[K];
+	for (int k = 0; k < K; k++) {
+		q[k] = b[k];
+		o[k] = k ? tmp + (b[k] - b[0]) + 16 * k : out;
+		src[k] = o[k];
+	}
+	intptr_t lim[K];
+	for (int k = 0; k < K; k++) {
+		lim[k] = intptr_t(b[k + 1]) - 10 * (U - 1);
+	}
+	for (;;) {
+		intptr_t t = -1;
+		for (int k = 0; k < K; k++) {
+			t &= intptr_t(q[k]) - lim[k];
+		}
+		if (t >= 0) {
+			break;
+		}
+		for (int k = 0; k < K; k++) {
+			const uint8_t *x = q[k];
+			uint64_t w = 0;
+			for (int u = 0; u < U; u++) {
+				uint64_t d = x[u];
+				w |= d << (8 * u);
+				x += d;
+			}
+			memcpy(o[k], &w, U);
+			q[k] = x + U;
+			o[k] += U;
+		}
+	}
+	for (;;) {
+		bool any = false;
+		for (int k = 0; k < K; k++) {
+			const uint8_t *x = q[k];
+			bool act = x < b[k + 1];
+			any |= act;
+			uint8_t d = *x;
+			*o[k] = d;
+			q[k] = act ? x + d + 1 : x;
+			o[k] += act;
+		}
+		if (!any) {
+			break;
+		}
+	}
+	uint8_t *dst = o[0];
+	const uint8_t *c = q[0];
+	for (int k = 1; k < K; k++) {
+		const uint8_t *g = b[k];
+		const uint8_t *e = b[k + 1];
+		size_t j = 0;
+		while (g != c && c < e) {
+			bool ag = g < c;
+			uint8_t dg = *g, dc = *c;
+			*dst = dc;
+			dst += !ag;
+			c = ag ? c : c + dc + 1;
+			g = ag ? g + dg + 1 : g;
+			j += ag;
+		}
+		if (g == c && c < e) {
+			size_t n = o[k] - src[k] - j;
+			memcpy(dst, src[k] + j, n);
+			dst += n;
+			c = q[k];
+		}
+	}
+	out = dst;
+	return c - r;
+}
+
+}
 
 void day14(input_t in) {
 	int input_n = 0;
-
-	alignas(alignof(uint32_t)) std::array<uint8_t, std::max(size_t(4), INPUT_LEN)> input;
+	uint8_t input[INPUT_LEN];
 	for (size_t i = 0; i < INPUT_LEN; i++) {
 		input[i] = in.s[i] - '0';
 		input_n = 10 * input_n + input[i];
 	}
 
-	// Only those recipes used as ingredients, excluding the PREMIX recipes
-	auto mixers = reinterpret_cast<uint8_t *>(aligned_alloc(32, MIXERS_MEM));
+	auto mixers = reinterpret_cast<uint8_t *>(malloc(MIXERS_MEM));
 	size_t mixers_size = 0;
 
-	/* Full array of recipes, initialized with the base recipes.  The rest
-	 * of the array is prepopulated with ones, which makes dealing with the
-	 * tens digits significantly more efficient
-	 */
-	auto recipes = reinterpret_cast<uint8_t *>(aligned_alloc(32, RECIPES_MEM));
-	std::fill(recipes, recipes + RECIPES_MEM, 1);
-	std::copy(BASE.begin(), BASE.end(), recipes);
-	size_t recipes_size = BASE.size();
+	alignas(64) uint8_t win[WIN_CAP];
+	std::copy(std::begin(BASE), std::end(BASE), win);
+	size_t base = 0;
+	size_t recipes_size = 23;
 
-	/* Premix queues for the two elves; using signed integers for
-	 * arithmetic right-shift
-	 */
+	char part1[11] = {0};
+	bool part1_ready = false;
+	const auto try_part1 = [&]() {
+		if (!part1_ready && size_t(input_n) + 10 <= recipes_size) {
+			for (int i = 0; i < 10; i++) {
+				part1[i] = '0' + win[input_n + i - base];
+			}
+			part1_ready = true;
+		}
+	};
+
 	int32_t premix[] = { int32_t(PREMIX[0]), int32_t(PREMIX[8]) };
-
-	// Next index to be added to mixers
-	size_t next_idx = BASE.size(), last_idx = BASE.size();
-
-	// Current index into mixers for both elves
+	size_t next_idx = 23;
+	alignas(64) uint8_t tmpbuf[WIN_CAP];
 	size_t idx[2] = { 0, 0 };
 
-	// Part 2 "needle" vector (first 4 digits of the input) for SIMD search
-	auto needle = _mm256_set1_epi32(*reinterpret_cast<uint32_t *>(&input[0]));
-	size_t search_offset = 0, found_offset = -1;
+	size_t search_offset = 0;
+	long found_offset = -1;
+	bool found = false;
 
-	// Appends a single recipe to the 'recipes' and (maybe) 'mixers' lists
 	const auto append_recipe = [&](uint8_t recipe) {
-		// Tens digit
 		if (recipe >= 10) {
 			recipe -= 10;
 			if (recipes_size == next_idx) {
 				mixers[mixers_size++] = 1;
-				last_idx = next_idx;
 				next_idx += 2;
 			}
-			// 'recipe' is prepopulated with ones, so just increment size
+			win[recipes_size - base] = 1;
 			recipes_size++;
 		}
-
-		// Ones digit
 		if (recipes_size == next_idx) {
 			mixers[mixers_size++] = recipe;
-			last_idx = next_idx;
 			next_idx += recipe + 1;
 		}
-		recipes[recipes_size++] = recipe;
-
-		// Handle wraparound
+		win[recipes_size - base] = recipe;
+		recipes_size++;
 		for (int i = 0; i < 2; i++) {
 			if (idx[i] == mixers_size) {
-				premix[i] = PREMIX[last_idx + mixers[mixers_size - 1] + 1 - recipes_size];
+				premix[i] = PREMIX[next_idx - recipes_size];
 				idx[i] = 0;
 			}
 		}
 	};
 
+	const uint8x16_t n0 = vdupq_n_u8(input[0]);
+	const uint8x16_t n1 = vdupq_n_u8(input[1]);
+	const uint8x16_t n2 = vdupq_n_u8(input[2]);
+	const uint8x16_t n3 = vdupq_n_u8(input[3]);
+	const uint8x16_t n4 = vdupq_n_u8(input[4]);
+	const uint8x16_t n5 = vdupq_n_u8(input[5]);
+
+	const auto exact16 = [&](const uint8_t *p) -> int {
+		uint8x16_t acc = vabdq_u8(vld1q_u8(p), n0);
+		acc = vabaq_u8(acc, vld1q_u8(p + 1), n1);
+		acc = vabaq_u8(acc, vld1q_u8(p + 2), n2);
+		acc = vabaq_u8(acc, vld1q_u8(p + 3), n3);
+		acc = vabaq_u8(acc, vld1q_u8(p + 4), n4);
+		acc = vabaq_u8(acc, vld1q_u8(p + 5), n5);
+		uint8x16_t eq = vceqzq_u8(acc);
+		uint64_t m = vget_lane_u64(vreinterpret_u64_u8(
+				vshrn_n_u16(vreinterpretq_u16_u8(eq), 4)), 0);
+		return m ? int(__builtin_ctzll(m) >> 2) : -1;
+	};
+
+	const auto filter16 = [&](const uint8_t *p) {
+		uint8x16_t acc = vabdq_u8(vld1q_u8(p), n0);
+		acc = vabaq_u8(acc, vld1q_u8(p + 1), n1);
+		return vabaq_u8(acc, vld1q_u8(p + 2), n2);
+	};
+
+	const auto search = [&]() {
+		for (; search_offset + 96 <= recipes_size; search_offset += 64) {
+			const uint8_t *p = win + (search_offset - base);
+			uint8x16_t a = vminq_u8(filter16(p), filter16(p + 16));
+			uint8x16_t b = vminq_u8(filter16(p + 32), filter16(p + 48));
+			if (__builtin_expect(vminvq_u8(vminq_u8(a, b)) == 0, 0)) {
+				for (int k = 0; k < 64; k += 16) {
+					int m = exact16(p + k);
+					if (m >= 0) {
+						found_offset = search_offset + k + m;
+						found = true;
+						return;
+					}
+				}
+			}
+		}
+	};
+
+	const uint8x16_t nine = vdupq_n_u8(9);
+	const uint8x16_t ten = vdupq_n_u8(10);
+	const uint8x16_t ones = vdupq_n_u8(1);
+	const uint8x16_t bitw = { 1,2,4,8,16,32,64,128, 1,2,4,8,16,32,64,128 };
+
 	for (;;) {
-		// One or both of the elves is working on premix
 		do {
 			uint8_t recipe = 0;
 			for (int i = 0; i < 2; i++) {
@@ -117,135 +269,97 @@ void day14(input_t in) {
 			append_recipe(recipe);
 		} while ((premix[0] & premix[1]) != -1);
 
-		/* Both elves are working on the converged mixers; these are
-		 * processed in groups of 32 through the magic of SIMD.
-		 * This outer loop will run multiple times (with successively
-		 * fewer iterations), because each block of iterations will add
-		 * more mixers to the list.
-		 */
-		if (idx[0] != 0) {
-			/* Invariant: One of the indices is always zero, so we
-			 * can use aligned load instructions for that one.
-			 */
-			std::swap(idx[0], idx[1]);
-		}
 		for (;;) {
-			size_t iterations = (mixers_size - std::max(idx[0], idx[1])) / 32;
+			size_t iterations = (mixers_size - std::max(idx[0], idx[1])) / 16;
 			if (iterations == 0) {
 				break;
 			}
-
-			for (size_t i = 0; i < iterations; i++) {
-				auto v0 = _mm256_load_si256( reinterpret_cast<__m256i *>(&mixers[idx[0]]));
-				auto v1 = _mm256_loadu_si256(reinterpret_cast<__m256i *>(&mixers[idx[1]]));
-				idx[0] += 32, idx[1] += 32;
-
-				// vsum = v0 + v1
-				auto vsum = _mm256_add_epi8(v0, v1);
-
-				// vtens = (vsum < 10) ? 0 : -1
-				auto vtens = _mm256_cmpgt_epi8(vsum, _mm256_set1_epi8(9));
-
-				// vsum %= 10
-				vsum = _mm256_sub_epi8(vsum, _mm256_and_si256(vtens, _mm256_set1_epi8(10)));
-
-				// Calculate the running sum of vtens (separate running sum per 16-byte lane)
-				vtens = _mm256_add_epi8(vtens, _mm256_bslli_epi128(vtens, 8));
-				vtens = _mm256_add_epi8(vtens, _mm256_bslli_epi128(vtens, 4));
-				vtens = _mm256_add_epi8(vtens, _mm256_bslli_epi128(vtens, 2));
-				vtens = _mm256_add_epi8(vtens, _mm256_bslli_epi128(vtens, 1));
-
-				/* Use the summed vtens vector to compute adjusted offsets into 'recipes'
-				 * These offsets are where the "vsum % 10" digits will be stored.
-				 */
-				auto voffset = _mm256_sub_epi8(
-						_mm256_setr_epi8(
-							0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
-							0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15), vtens);
-
-				/* Scatter the digits into the correct locations.  We do this
-				 * separately for each 16-byte lane.  This is faster than using
-				 * additional cross-lane operations to compute a 32-element
-				 * running sum for the 'vtens' vector above.
-				 */
-				auto digit = reinterpret_cast<uint8_t *>(&vsum);
-				auto offset = reinterpret_cast<uint8_t *>(&voffset);
-
-				// Low lane
-				for (int i = 0; i < 16; i++) {
-					recipes[recipes_size + offset[i]] = digit[i];
-				}
-				recipes_size += offset[15] + 1;
-
-				// High lane
-				for (int i = 16; i < 32; i++) {
-					recipes[recipes_size + offset[i]] = digit[i];
-				}
-				recipes_size += offset[31] + 1;
-
-				// Check for loop termination
-				if ((i % CHECK_INTERVAL) == 0) {
-					static_assert(INPUT_LEN == 6, "search is implemented only for INPUT_LEN == 6");
-
-					// Search for the part2 solution, examining 16 starting offsets at a time
-					for (; search_offset < recipes_size - 32; search_offset += 16) {
-						auto v = _mm256_loadu_si256(reinterpret_cast<__m256i *>(&recipes[search_offset]));
-						v = _mm256_permutevar8x32_epi32(v, _mm256_setr_epi32(0, 1, 2, -1, 2, 3, 4, -1));
-
-						auto cmp = _mm256_mpsadbw_epu8(v, needle, 0);
-						cmp = _mm256_cmpeq_epi16(cmp, _mm256_setzero_si256());
-
-						/* Iterate over all 4-byte matches, and check whether the
-						 * final 2 bytes of the input also match
-						 */
-						auto mask = _mm256_movemask_epi8(cmp) & 0x55555555;
-						while (mask) {
-							auto m = _tzcnt_u32(mask) >> 1;
-							mask = _blsr_u32(mask);
-
-							found_offset = search_offset + m;
-							if (recipes[found_offset + 4] == input[4] &&
-							    recipes[found_offset + 5] == input[5])
-							{
-								goto done;
-							}
-						}
-					}
-
-					// Or, just give up
-					if (recipes_size > GENERATE_LIMIT) {
-						found_offset = -1;
-						goto done;
-					}
-				}
+			if (iterations > CHUNK) {
+				iterations = CHUNK;
 			}
 
-			/* Propagate new values from 'recipes' into 'mixers'
-			 * This loop will always iterate at least once, because
-			 * the maximum interval between mixers is 10, and the
-			 * vectorized loop produces at least 32 new recipes.
-			 */
-			do {
-				last_idx = next_idx;
-				mixers[mixers_size++] = recipes[next_idx];
-				next_idx += recipes[next_idx] + 1;
-			} while (next_idx < recipes_size);
-			// Invariant: (idx[0] < mixers_size) && (idx[1] < mixers_size)
+			const uint8_t *m0 = mixers + idx[0];
+			const uint8_t *m1 = mixers + idx[1];
+			uint8_t *out = win + (recipes_size - base);
+			uint8_t *out_start = out;
+			size_t i = 0;
+			for (; i + 2 <= iterations; i += 2) {
+				uint8x16_t s0 = vaddq_u8(vld1q_u8(m0 + 16 * i), vld1q_u8(m1 + 16 * i));
+				uint8x16_t s1 = vaddq_u8(vld1q_u8(m0 + 16 * i + 16), vld1q_u8(m1 + 16 * i + 16));
+				uint8x16_t t0 = vcgtq_u8(s0, nine);
+				uint8x16_t t1 = vcgtq_u8(s1, nine);
+				s0 = vsubq_u8(s0, vandq_u8(t0, ten));
+				s1 = vsubq_u8(s1, vandq_u8(t1, ten));
+				uint8x16_t b = vpaddq_u8(vandq_u8(t0, bitw), vandq_u8(t1, bitw));
+				b = vpaddq_u8(b, b);
+				b = vpaddq_u8(b, b);
+				uint32_t mm = vgetq_lane_u32(vreinterpretq_u32_u8(b), 0);
+				uint32_t ma = mm & 0xff, mb = (mm >> 8) & 0xff, mc = (mm >> 16) & 0xff, md = mm >> 24;
+				uint8x16_t oa = vqtbx1q_u8(ones, s0, vld1q_u8(TAB.lo[ma]));
+				uint8x16_t ob = vqtbx1q_u8(ones, s0, vld1q_u8(TAB.hi[mb]));
+				uint8x16_t oc = vqtbx1q_u8(ones, s1, vld1q_u8(TAB.lo[mc]));
+				uint8x16_t od = vqtbx1q_u8(ones, s1, vld1q_u8(TAB.hi[md]));
+				uint32_t cn = vget_lane_u32(vreinterpret_u32_u8(vcnt_u8(vget_low_u8(b))), 0);
+				uint32_t pre = (cn + 0x08080808u) * 0x01010101u;
+				vst1q_u8(out, oa);
+				vst1q_u8(out + (pre & 0xff), ob);
+				vst1q_u8(out + ((pre >> 8) & 0xff), oc);
+				vst1q_u8(out + ((pre >> 16) & 0xff), od);
+				out += pre >> 24;
+			}
+			for (; i < iterations; i++) {
+				uint8x16_t s = vaddq_u8(vld1q_u8(m0 + 16 * i), vld1q_u8(m1 + 16 * i));
+				uint8x16_t t = vcgtq_u8(s, nine);
+				s = vsubq_u8(s, vandq_u8(t, ten));
+				uint8x16_t b = vandq_u8(t, bitw);
+				b = vpaddq_u8(b, b);
+				b = vpaddq_u8(b, b);
+				b = vpaddq_u8(b, b);
+				uint32_t mm = vgetq_lane_u16(vreinterpretq_u16_u8(b), 0);
+				uint32_t mlo = mm & 0xff, mhi = mm >> 8;
+				uint8x16_t olo = vqtbx1q_u8(ones, s, vld1q_u8(TAB.lo[mlo]));
+				uint8x16_t ohi = vqtbx1q_u8(ones, s, vld1q_u8(TAB.hi[mhi]));
+				vst1q_u8(out, olo);
+				out += TAB.len[mlo];
+				vst1q_u8(out, ohi);
+				out += TAB.len[mhi];
+			}
+			idx[0] += 16 * iterations;
+			idx[1] += 16 * iterations;
+			recipes_size += out - out_start;
+
+			{
+				uint8_t *mo = mixers + mixers_size;
+				next_idx = base + propagate<PK, PU>(win, next_idx - base, recipes_size - base, mo, tmpbuf);
+				mixers_size = mo - mixers;
+			}
+
+			if (!found) {
+				search();
+			}
+			try_part1();
+			if (found && part1_ready) {
+				goto done;
+			}
+			if (recipes_size > GENERATE_LIMIT) {
+				found_offset = -1;
+				try_part1();
+				goto done;
+			}
+
+			if (recipes_size - base > WIN_USE) {
+				size_t nb = std::min(std::min(next_idx, search_offset), recipes_size - 16) & ~size_t(15);
+				memmove(win, win + (nb - base), recipes_size - nb);
+				base = nb;
+			}
 		}
 
-		// Handle the remaining <32 recipes before wrapping back to premix
 		do {
 			append_recipe(mixers[idx[0]++] + mixers[idx[1]++]);
 		} while ((premix[0] & premix[1]) == -1);
 	}
 
 done:
-	std::string part1(10, 0);
-	std::copy(recipes + input_n, recipes + input_n + 10, part1.begin());
-	for (auto &c : part1) {
-		c += '0';
-	}
-
-	printf("Day 14 Part 1: %s\nDay 14 Part 2: %ld\n",
-			part1.c_str(), found_offset);
+	free(mixers);
+	printf("Day 14 Part 1: %s\nDay 14 Part 2: %ld\n", part1, found_offset);
 }
