@@ -6,7 +6,7 @@
 #                 can't break each other), verifies them, and benchmarks each against original
 #                 back to back. Use this while iterating.
 #   Without days: full run. Builds everything, verifies all 25 days, benchmarks 3 full rounds,
-#                 writes shared/results/<solution>.tsv and regenerates the README results table.
+#                 writes <solution>/results.tsv and prints it next to the original baselines only.
 set -e
 source "$(dirname "$0")/common.sh"
 SOL=$(solution_dir "$1"); shift
@@ -15,7 +15,7 @@ ORIG=$("$SHARED/build.sh" original)
 
 if [ $# -eq 0 ]; then
   "$SHARED/bench.sh" "$NAME"
-  python3 "$SHARED/compare.py" --readme
+  python3 "$SHARED/compare.py" --only "$NAME"
   exit 0
 fi
 

@@ -1,6 +1,7 @@
 #!/bin/bash
 # usage: shared/bench.sh <solution> [--x86] [--rounds N]
-# Verifies, then benchmarks every day (best min across N full rounds, default 3) and writes shared/results/<solution>.tsv.
+# Verifies, then benchmarks every day (best min across N full rounds, default 3).
+# Writes <solution>/results.tsv (baselines original/original-x86 go to shared/results/).
 # Run on an otherwise idle machine.
 set -e
 source "$(dirname "$0")/common.sh"
@@ -18,7 +19,11 @@ BIN=$("$SHARED/build.sh" "$(basename "$SOL")" $X86)
 cd "$SHARED"
 TMP=$(mktemp -d)
 for r in $(seq 1 $ROUNDS); do "$BIN" all -q 2> "$TMP/$r.txt"; done
-OUTF="$SHARED/results/$NAME.tsv"
+case "$NAME" in
+  original|original-x86) OUTF="$SHARED/results/$NAME.tsv";;
+  *-x86) OUTF="$SOL/results-x86.tsv";;
+  *) OUTF="$SOL/results.tsv";;
+esac
 {
   echo "# solution: $NAME"
   echo "# machine: $(sysctl -n machdep.cpu.brand_string), $(sw_vers -productName) $(sw_vers -productVersion)"

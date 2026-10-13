@@ -16,13 +16,13 @@ It builds, verifies against the original's answers on 205 public inputs (shared/
 - `shared/test.sh <name> 14`        quick loop for one or more days: build, verify, and an A/B timing vs original.
                                      Other days link from original/, so it's safe while other agents edit other days.
 - `shared/test.sh <name>`           final full run: verifies all 25 days, benchmarks 3 rounds, writes
-                                     shared/results/<name>.tsv and updates the README results table.
+                                     <name>/results.tsv and prints it next to the original's timings.
 
 Run the full run once at the end. Any FAIL line means your output differs from the original for that input.
 Timings are noisy if other work is running; judge by the min and re-run if unsure.
 
 Rules:
-1. Edit only files under `<name>/`. Do not modify `original/`, `shared/`, or other solutions.
+1. Edit only files under `<name>/`. Do not modify `original/` or `shared/`. Do not read or modify any other solution folder (e.g. `opus-5.5/`); work out your own approach.
    `advent2018.h` and the harness interface (`void dayNN(input_t)`) must stay compatible with `shared/bench.cpp`.
 2. Output must be byte-identical to the original's (same printf lines); `shared/verify.sh <name>` must pass for every input.
 3. Genuine general solutions only: no hardcoded answers, no input-specific constants, no tables encoding puzzle results,

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Compare benchmark results in shared/results/*.tsv.
+"""Compare benchmark results.
 
-usage: shared/compare.py [--readme]   (--readme also rewrites the results table in README.md)
+Baselines live in shared/results/{original,original-x86}.tsv; each solution's results live in <solution>/results.tsv.
+
+usage:
+  shared/compare.py                    all solutions side by side
+  shared/compare.py --only NAME        one solution vs the baselines only (what test.sh prints to agents)
+  shared/compare.py --out FILE         also write the table to FILE (markdown)
 """
 import pathlib
 import sys
@@ -24,53 +29,54 @@ def load(path):
     return meta, days
 
 
+def all_results():
+    results = {p.stem: load(p) for p in sorted((SHARED / "results").glob("*.tsv"))}
+    for p in sorted(ROOT.glob("*/results.tsv")):
+        if p.parent.name not in FIRST:
+            results[p.parent.name] = load(p)
+    return results
+
+
 def fmt(us):
     return f"{us / 1000:,.2f} ms" if us >= 1000 else f"{us:,.1f} μs"
 
 
-def table():
-    results = {p.stem: load(p) for p in sorted((SHARED / "results").glob("*.tsv"))}
+def table(results):
     names = [n for n in FIRST if n in results] + sorted(n for n in results if n not in FIRST)
     base = results.get(BASELINE, (None, None))[1]
-    header = "| Day | " + " | ".join(f"`{n}`" for n in names) + " |"
-    lines = [header, "|----:|" + "---:|" * len(names)]
-    totals = {n: sum(results[n][1].values()) for n in names}
+    lines = ["| Day | " + " | ".join(f"`{n}`" for n in names) + " |", "|----:|" + "---:|" * len(names)]
     for day in range(1, 26):
-        best = min(results[n][1][day] for n in names if day in results[n][1])
+        present = [results[n][1][day] for n in names if day in results[n][1]]
+        best = min(present) if present else None
         cells = []
         for n in names:
             v = results[n][1].get(day)
             if v is None:
                 cells.append("–")
                 continue
-            cell = fmt(v)
-            if base and n not in FIRST:
-                cell += f" ({base[day] / v:.1f}x)"
+            cell = fmt(v) + (f" ({base[day] / v:.1f}x)" if base and n not in FIRST else "")
             cells.append(f"**{cell}**" if v == best else cell)
         lines.append(f"| {day} | " + " | ".join(cells) + " |")
-    total_cells = []
-    best_total = min(totals.values())
+    totals = []
     for n in names:
-        cell = fmt(totals[n])
-        if base and n not in FIRST:
-            cell += f" ({sum(base.values()) / totals[n]:.1f}x)"
-        total_cells.append(f"**{cell}**")
-    lines.append("| **Total** | " + " | ".join(total_cells) + " |")
+        t = sum(results[n][1].values())
+        totals.append(f"**{fmt(t)}" + (f" ({sum(base.values()) / t:.1f}x)" if base and n not in FIRST else "") + "**")
+    lines.append("| **Total** | " + " | ".join(totals) + " |")
     machines = sorted({results[n][0].get("machine", "?") for n in names})
-    lines.append("")
-    lines.append(f"Min time per day, single-threaded. Speedups are vs `{BASELINE}` (native arm64). Bold = fastest per day. Machine: {'; '.join(machines)}.")
+    lines += ["", f"Min time per day, single-threaded. Speedups are vs `{BASELINE}` (native arm64). Bold = fastest per day. Machine: {'; '.join(machines)}."]
     return "\n".join(lines)
 
 
 def main():
-    out = table()
+    args = sys.argv[1:]
+    results = all_results()
+    if "--only" in args:
+        name = args[args.index("--only") + 1]
+        results = {n: r for n, r in results.items() if n in FIRST or n == name}
+    out = table(results)
     print(out)
-    if "--readme" in sys.argv:
-        readme = ROOT / "README.md"
-        text = readme.read_text()
-        start, end = "<!-- results:start -->", "<!-- results:end -->"
-        i, j = text.index(start) + len(start), text.index(end)
-        readme.write_text(text[:i] + "\n" + out + "\n" + text[j:])
+    if "--out" in args:
+        pathlib.Path(args[args.index("--out") + 1]).write_text(out + "\n")
 
 
 if __name__ == "__main__":
