@@ -1,7 +1,7 @@
 # Agent prompt template
 
 Copy this to the agent you want to test, replacing `<name>` with its solution folder (create it first with `shared/new-solution.sh <name>`).
-For one agent per day, replace "every day" with "day NN" and tell it to use `shared/bday.sh <name> NN` instead of `shared/build.sh`.
+For one agent per day, replace "every day" with "day NN"; each agent only runs `shared/test.sh <name> NN`, and you do the full run once they are all done.
 
 ---
 
@@ -10,12 +10,16 @@ Your solution lives in `<name>/src/`. It starts as a copy of `original/src/`, Vo
 (see `original/README.md` for notes on each day). On arm64 that code builds through SIMDe, an AVX2-to-NEON translation layer,
 which is often far from optimal. Goal: make every day in `<name>/src/` as fast as possible.
 
-Commands (run from the repo root):
-- Build:   `shared/build.sh <name>`                     -> build/<name>/bench
-- Verify:  `shared/verify.sh <name> [day ...]`          -> must print ALL PASS (compares against the original's answers on 205 public inputs in shared/tests/)
-- Bench:   `build/<name>/bench <day> -q`                 (min/median over many runs; `all` runs every day)
-- Compare: `build/original/bench <day> -q`              (build it with `shared/build.sh original`)
-- Per-day build (links other days from original/): `shared/bday.sh <name> <day>`
+The only things you do: edit `.cpp` files in `<name>/src/`, then run the shared test command from the repo root.
+It builds, verifies against the original's answers on 205 public inputs (shared/tests/), and benchmarks against the original for you:
+
+- `shared/test.sh <name> 14`        quick loop for one or more days: build, verify, and an A/B timing vs original.
+                                     Other days link from original/, so it's safe while other agents edit other days.
+- `shared/test.sh <name>`           final full run: verifies all 25 days, benchmarks 3 rounds, writes
+                                     shared/results/<name>.tsv and updates the README results table.
+
+Run the full run once at the end. Any FAIL line means your output differs from the original for that input.
+Timings are noisy if other work is running; judge by the min and re-run if unsure.
 
 Rules:
 1. Edit only files under `<name>/`. Do not modify `original/`, `shared/`, or other solutions.
