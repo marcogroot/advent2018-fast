@@ -1,146 +1,128 @@
 #include "advent2018.h"
+#include <arm_neon.h>
 
 namespace {
 
-struct event_t {
-	int64_t date, event;
-	event_t(int64_t date, int64_t event) : date(date), event(event) { }
-	bool operator < (const event_t &o) const {
-		return date < o.date;
-	}
-};
+constexpr int MAXDAY = 400;
+constexpr int HSIZE = 256;
+constexpr int MAXG = 256;
 
-struct tally_t {
-	__m256i t[2];
-	tally_t() : t() { }
-};
+const uint16_t month_start[16] = {
+	0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365, 365, 365 };
 
+inline uint64_t prefix_xor(uint64_t x) {
+	x ^= x << 1;
+	x ^= x << 2;
+	x ^= x << 4;
+	x ^= x << 8;
+	x ^= x << 16;
+	x ^= x << 32;
+	return x;
 }
 
-static const __m256i identity = _mm256_set_epi64x(
-		0x1f1e1d1c1b1a1918, 0x1716151413121110,
-		0x0f0e0d0c0b0a0908, 0x0706050403020100);
+inline int first_index_of(const uint8x16_t t[4], uint8_t v) {
+	uint8x16_t vv = vdupq_n_u8(v);
+	for (int k = 0; k < 4; k++) {
+		uint8x16_t eq = vceqq_u8(t[k], vv);
+		uint64_t m = vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(eq), 4)), 0);
+		if (m) return k * 16 + (__builtin_ctzll(m) >> 2);
+	}
+	return -1;
+}
 
-// Set all values to the vector max value
-static __m256i horizontal_max(__m256i v) {
-	v = _mm256_max_epu8(v, _mm256_alignr_epi8(v, v, 8));
-	v = _mm256_max_epu8(v, _mm256_alignr_epi8(v, v, 4));
-	v = _mm256_max_epu8(v, _mm256_alignr_epi8(v, v, 2));
-	v = _mm256_max_epu8(v, _mm256_alignr_epi8(v, v, 1));
-	return _mm256_max_epu8(v, _mm256_permute2x128_si256(v, v, 0x01));
 }
 
 void day04(input_t input) {
-	std::vector<event_t> E;
-	std::unordered_map<int64_t, int64_t> G;
-	std::vector<int64_t> Gi;
+	uint64_t toggles[MAXDAY];
+	uint8_t day_guard[MAXDAY];
+	memset(toggles, 0, sizeof(toggles));
+	memset(day_guard, 0xff, sizeof(day_guard));
 
-	char *s = input.s;
-	int64_t date = 0, guard = 0, *np = &date;
-	for (; input.len--; input.s++) {
-		uint8_t c = *input.s - '0';
-		if (c < 10) {
-			*np = 10 * *np + c;
-		} else if (*input.s == '#') {
-			*(np = &guard) = 0;
-		} else if (*input.s == '\n') {
-			if (input.s - s < 27) abort();
-			switch (s[19]) {
-			    case 'G':
-				{
-					auto [ it, ok ] = G.emplace(guard, G.size());
-					if (ok) {
-						Gi.push_back(guard);
-					}
-					E.emplace_back(date, it->second);
-					break;
-				}
-			    case 'f':
-				{
-					E.emplace_back(date, -1);
-					break;
-				}
-			    case 'w':
-				{
-					E.emplace_back(date, -2);
-					break;
-				}
+	int32_t hkey[HSIZE];
+	uint8_t hval[HSIZE];
+	memset(hkey, 0xff, sizeof(hkey));
+	int32_t gid[MAXG];
+	uint16_t gcount[MAXG + 1];
+	int ng = 0;
+
+	const char *p = input.s, *end = input.s + input.len;
+	while (p + 27 <= end) {
+		unsigned month = (p[6] - '0') * 10 + (p[7] - '0');
+		unsigned day = (p[9] - '0') * 10 + (p[10] - '0');
+		unsigned d = month_start[month & 15] + day;
+		char c = p[19];
+		if (c == 'G') {
+			const char *q = p + 26;
+			int id = 0;
+			while ((unsigned)(*q - '0') < 10) id = id * 10 + (*q++ - '0');
+			d += (p[12] != '0') | (p[13] != '0');
+			unsigned h = (uint32_t(id) * 2654435761u) >> 24;
+			while (hkey[h] != id && hkey[h] != -1) h = (h + 1) & (HSIZE - 1);
+			if (hkey[h] == -1) {
+				hkey[h] = id;
+				hval[h] = ng;
+				gcount[ng] = 0;
+				gid[ng++] = id;
 			}
-			s = input.s + 1;
-			*(np = &date) = 0;
+			day_guard[d] = hval[h];
+			gcount[hval[h]]++;
+			p = q + 14;
+		} else {
+			unsigned minute = (p[15] - '0') * 10 + (p[16] - '0');
+			toggles[d] ^= uint64_t(1) << minute;
+			if (c == 'f') { p += 32; asm volatile(""); } else { p += 28; }
 		}
 	}
 
-	std::vector<tally_t> T(G.size());
-	std::vector<int64_t> S(G.size());
-
-	int64_t cur_guard = 0, sleep_time = 0;
-	std::sort(E.begin(), E.end());
-	for (auto &e : E) {
-		switch (e.event) {
-		    case -2:
-			{
-				// Tally up the minutes spent sleeping by the guard
-				auto wake_time = e.date % 100;
-				__m256i sleep0 = _mm256_and_si256(
-						_mm256_cmpgt_epi8(identity, _mm256_set1_epi8(sleep_time - 1)),
-						_mm256_cmpgt_epi8(_mm256_set1_epi8(wake_time), identity));
-				__m256i sleep1 = _mm256_and_si256(
-						_mm256_cmpgt_epi8(identity, _mm256_set1_epi8(sleep_time - 33)),
-						_mm256_cmpgt_epi8(_mm256_set1_epi8(wake_time - 32), identity));
-				T[cur_guard].t[0] = _mm256_sub_epi8(T[cur_guard].t[0], sleep0);
-				T[cur_guard].t[1] = _mm256_sub_epi8(T[cur_guard].t[1], sleep1);
-				S[cur_guard] += wake_time - sleep_time;
-				break;
-			}
-		    case -1:
-			{
-				sleep_time = e.date % 100;
-				break;
-			}
-		    default:
-			{
-				cur_guard = e.event;
-				break;
-			}
-		}
+	uint16_t gstart[MAXG + 1];
+	unsigned acc = 0;
+	for (int i = 0; i < ng; i++) {
+		gstart[i] = acc;
+		acc += gcount[i];
+	}
+	gstart[ng] = acc;
+	uint16_t pos[MAXG];
+	memcpy(pos, gstart, sizeof(uint16_t) * ng);
+	uint64_t sorted[MAXDAY];
+	for (int d = 0; d < MAXDAY; d++) {
+		unsigned g = day_guard[d];
+		if (g != 0xff) sorted[pos[g]++] = prefix_xor(toggles[d]);
 	}
 
-	// Find guard who sleeps the most
-	int64_t max_guard = 0;
-	for (int i = 1; i < G.size(); i++) {
-		if (S[i] > S[max_guard]) {
-			max_guard = i;
-		}
-	}
+	static const uint8_t bitpat_b[16] = { 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+	static const uint8_t idx_b[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1 };
+	const uint8x16_t bitpat = vld1q_u8(bitpat_b);
+	const uint8x16_t idx0 = vld1q_u8(idx_b);
+	const uint8x16_t two = vdupq_n_u8(2);
+	const uint8x16_t idx1 = vaddq_u8(idx0, two);
+	const uint8x16_t idx2 = vaddq_u8(idx1, two);
+	const uint8x16_t idx3 = vaddq_u8(idx2, two);
 
-	// Find that guard's max minute
-	auto maxv = horizontal_max(_mm256_max_epu8(T[max_guard].t[0], T[max_guard].t[1]));
-	auto cmp = uint64_t(_mm256_movemask_epi8(_mm256_cmpeq_epi8(maxv, T[max_guard].t[1]))) << 32 |
-	                    _mm256_movemask_epi8(_mm256_cmpeq_epi8(maxv, T[max_guard].t[0]));
-
-	int part1 = Gi[max_guard] * _mm_tzcnt_64(cmp);
-
-	// Find max minute across all guards
-	maxv = _mm256_setzero_si256();
-	for (auto &t : T) {
-		maxv = _mm256_max_epu8(maxv, t.t[0]);
-		maxv = _mm256_max_epu8(maxv, t.t[1]);
-	}
-	maxv = horizontal_max(maxv);
-
-	// Find the guard who had that max minute
+	int64_t best_sleep = -1;
+	int part1 = 0;
+	unsigned best_minute_count = 0;
 	int part2 = 0;
-	for (int i = 0; i < G.size(); i++) {
-		auto cmp = _mm256_movemask_epi8(_mm256_cmpeq_epi8(maxv, T[i].t[0]));
-		if (cmp) {
-			part2 = Gi[i] * _mm_tzcnt_32(cmp);
-			break;
+	for (int g = 0; g < ng; g++) {
+		uint8x16_t t0 = vdupq_n_u8(0), t1 = t0, t2 = t0, t3 = t0;
+		int64_t total = 0;
+		for (unsigned k = gstart[g]; k < gstart[g + 1]; k++) {
+			uint64_t asleep = sorted[k];
+			total += __builtin_popcountll(asleep);
+			uint8x16_t m = vreinterpretq_u8_u64(vdupq_n_u64(asleep));
+			t0 = vsubq_u8(t0, vtstq_u8(vqtbl1q_u8(m, idx0), bitpat));
+			t1 = vsubq_u8(t1, vtstq_u8(vqtbl1q_u8(m, idx1), bitpat));
+			t2 = vsubq_u8(t2, vtstq_u8(vqtbl1q_u8(m, idx2), bitpat));
+			t3 = vsubq_u8(t3, vtstq_u8(vqtbl1q_u8(m, idx3), bitpat));
 		}
-		cmp = _mm256_movemask_epi8(_mm256_cmpeq_epi8(maxv, T[i].t[1]));
-		if (cmp) {
-			part2 = Gi[i] * (_mm_tzcnt_32(cmp) + 32);
-			break;
+		uint8x16_t t[4] = { t0, t1, t2, t3 };
+		uint8_t mx = vmaxvq_u8(vmaxq_u8(vmaxq_u8(t0, t1), vmaxq_u8(t2, t3)));
+		if (total > best_sleep) {
+			best_sleep = total;
+			part1 = gid[g] * first_index_of(t, mx);
+		}
+		if (mx > best_minute_count) {
+			best_minute_count = mx;
+			part2 = gid[g] * first_index_of(t, mx);
 		}
 	}
 
