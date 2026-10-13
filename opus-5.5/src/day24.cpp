@@ -48,12 +48,39 @@ bool harmless(const Army &A, const State &S, const uint32_t *alive, int X) {
 	return true;
 }
 
-uint32_t fight(const Army &A, State &S, uint32_t dmg_boost, bool part2) {
+template <bool part2>
+uint32_t fight(const Army &A, State &S, uint32_t dmg_boost) {
 	uint32_t alive[2] = { A.alive0[0], A.alive0[1] };
 	uint32_t dm[NG];
 	for (int i = 0; i < NG; i++) {
 		dm[i] = A.dm[i] + ((alive[0] >> i) & 1) * dmg_boost;
 		S.pw[i] = S.un[i] * dm[i];
+	}
+
+	uint32_t need[NG][NG];
+	uint32_t hurts[NG];
+	uint32_t killers[NG];
+	if (part2) {
+		for (uint32_t m = alive[1]; m; m &= m - 1) killers[__builtin_ctz(m)] = 0;
+		for (uint32_t m = alive[0]; m; m &= m - 1) {
+			int i = __builtin_ctz(m);
+			int t = A.type[i];
+			hurts[i] = 0;
+			for (uint32_t c = alive[1] & A.vuln[t]; c; c &= c - 1) {
+				int g = __builtin_ctz(c);
+				uint64_t per = uint64_t(dm[i]) << ((A.wk[g] >> t) & 1);
+				if (!per) continue;
+				uint64_t q = (A.hp[g] + per - 1) / per;
+				need[i][g] = q;
+				if (q <= S.un[i]) {
+					hurts[i] |= 1u << g;
+					killers[g] |= 1u << i;
+				}
+			}
+		}
+		for (uint32_t m = alive[1]; m; m &= m - 1) {
+			if (!killers[__builtin_ctz(m)]) return 0;
+		}
 	}
 
 	uint8_t ord[NG], pos[NG];
@@ -103,6 +130,16 @@ uint32_t fight(const Army &A, State &S, uint32_t dmg_boost, bool part2) {
 			uint32_t kills = std::min(dmg / A.hp[d], S.un[d]);
 			kf |= uint32_t(kills != 0) << A.fac[a];
 			uint32_t u = S.un[d] -= kills;
+			if (part2 && !A.fac[d] && kills) {
+				for (uint32_t c = hurts[d]; c; c &= c - 1) {
+					int g = __builtin_ctz(c);
+					if (u < need[d][g]) {
+						hurts[d] &= ~(1u << g);
+						killers[g] &= ~(1u << d);
+						if (!killers[g] && ((alive[1] >> g) & 1)) return 0;
+					}
+				}
+			}
 			uint32_t p = S.pw[d] = u * dm[d];
 			int i0 = pos[d], i = i0;
 			if (!p) {
@@ -238,10 +275,10 @@ void day24(input_t input) {
 	}
 
 	State S = S0;
-	uint32_t part1 = fight(A, S, 0, false), part2 = 0;
+	uint32_t part1 = fight<false>(A, S, 0), part2 = 0;
 	for (uint32_t boost = 1; !part2; boost++) {
 		S = S0;
-		part2 = fight(A, S, boost, true);
+		part2 = fight<true>(A, S, boost);
 	}
 
 	printf("Day 24 Part 1: %u\nDay 24 Part 2: %u\n", part1, part2);

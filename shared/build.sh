@@ -18,5 +18,8 @@ for src in "$SHARED/bench.cpp" "$SOL"/src/day*.cpp; do
   OBJS+=("$obj")
 done
 wait
-clang++ $FLAGS "${OBJS[@]}" -o "$OUT/bench"
+relink=0
+[ -f "$OUT/bench" ] || relink=1
+for obj in "${OBJS[@]}"; do [ "$obj" -nt "$OUT/bench" ] && relink=1; done
+[ $relink = 1 ] && clang++ $FLAGS "${OBJS[@]}" -o "$OUT/bench"
 echo "$OUT/bench"

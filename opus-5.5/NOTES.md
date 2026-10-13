@@ -14,6 +14,8 @@ Machine: Apple M4 Max
 | Total agent time (sum of all 25 agents) | 5.2 h |
 | Total agent tokens | 3,277,082 |
 | Final verify + benchmark | ~2 min |
+| Follow-up: step-back review of days 14 and 24 (fresh agent, analysis only) | 9m 54s, 118,778 tokens |
+| Follow-up: day 24 early-exit implementation (same agent) | 3m 25s, 132,854 tokens |
 
 Per-day agent stats (from each subagent's completion report):
 
@@ -71,7 +73,7 @@ Per-day agent stats (from each subagent's completion report):
 - **Day 21:** Constants read from the parsed elfcode (with a general fallback); step rewritten to shorten the multiply dependency chain; 16-checkpoint NEON cycle detection.
 - **Day 22:** Bitset Dijkstra stepped one minute at a time with NEON dilation and an 8-slot ring for tool switches; NEON wavefront erosion-level generation.
 - **Day 23:** Per-node three-way partitioning replaces full sorts of split points; NEON parse and 16-bot-at-a-time in-range masks.
-- **Day 24:** Target selection is one count-trailing-zeros on per-rank bitmasks; endgame shortcut once one side can no longer kill anything.
+- **Day 24:** Target selection is one count-trailing-zeros on per-rank bitmasks; endgame shortcut once one side can no longer kill anything. Follow-up: part 2 gives up on a boost as soon as some alive infection group can no longer lose a unit to any alive immune group (immune power only decreases, so it can never win). Cuts part-2 rounds 66,757 → 4,967 on the benchmark input; ~1.9 ms → ~0.37 ms.
 - **Day 25:** NEON parse; points binned into a fixed (x,y) cell grid and checked only against neighbour cells, 16 at a time; union-find in a separate pass.
 
 ## Assumptions beyond the original
