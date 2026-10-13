@@ -6,7 +6,7 @@ struct val_t {
 	int a, b, c;
 	val_t() { }
 	val_t(int a, int b, int c) : a(a), b(b), c(c) { }
-	bool operator < (const val_t &o) {
+	bool operator < (const val_t &o) const {
 		return (a == o.a) ? (b < o.b) : (a < o.a);
 	}
 };

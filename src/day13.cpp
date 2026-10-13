@@ -5,7 +5,7 @@ namespace {
 struct Cart {
 	int y, x, dir, state;
 	Cart(int y, int x, int dir) : y(y), x(x), dir(dir), state() { }
-	bool operator < (const Cart& o) {
+	bool operator < (const Cart& o) const {
 		return (y == o.y) ? (x < o.x) : (y < o.y);
 	}
 };

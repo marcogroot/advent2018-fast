@@ -102,7 +102,7 @@ struct Region {
 		// Get initial distance to origin
 		int64_t dist = 0;
 		for (auto&& r : H) {
-			dist = std::max(dist, labs(r.first));
+			dist = std::max(dist, int64_t(llabs(r.first)));
 		}
 
 		while (delta) {
