@@ -1,185 +1,78 @@
-# advent2018-fast (Apple M4 Max experiment)
-
-Experimenting with **Claude Opus 5.5** to speed up an already heavily optimized repo: [Voltara/advent2018-fast](https://github.com/Voltara/advent2018-fast).
-The original is AVX2 C++ for x86. This fork builds it natively on arm64 (via SIMDe as a baseline), then has one agent per day rewrite each solution for the M4 Max.
-
-## Comparison (Apple M4 Max, single-threaded, min over many runs)
-
-| Day | Original x86 (Rosetta) | Original native arm64 (SIMDe) | Optimized (Opus 5.5) | Speedup vs native |
-|----:|---:|---:|---:|---:|
-|  1 | 13.7 μs | 10.8 μs | **2.3 μs** | 4.7x |
-|  2 | 12.6 μs | 9.7 μs | **1.4 μs** | 6.9x |
-|  3 | 83.4 μs | 53.8 μs | **26.0 μs** | 2.1x |
-|  4 | 30.0 μs | 27.0 μs | **2.1 μs** | 12.9x |
-|  5 | 246.5 μs | 213.5 μs | **26.2 μs** | 8.1x |
-|  6 | 405.5 μs | 374.1 μs | **5.6 μs** | 66.8x |
-|  7 | 0.9 μs | 0.5 μs | **0.2 μs** | 2.5x |
-|  8 | 26.1 μs | 24.3 μs | **6.2 μs** | 3.9x |
-|  9 | 1,204.4 μs | 1,813.4 μs | **274.4 μs** | 6.6x |
-| 10 | 12.6 μs | 8.4 μs | **0.8 μs** | 10.5x |
-| 11 | 990.1 μs | 617.0 μs | **117.1 μs** | 5.3x |
-| 12 | 42.0 μs | 42.4 μs | **2.1 μs** | 20.2x |
-| 13 | 203.0 μs | 188.8 μs | **36.5 μs** | 5.2x |
-| 14 | 30,853.0 μs | 47,265.0 μs | **2,281.8 μs** | 20.7x |
-| 15 | 6,472.2 μs | 1,755.5 μs | **597.0 μs** | 2.9x |
-| 16 | 43.3 μs | 39.3 μs | **4.1 μs** | 9.6x |
-| 17 | 552.4 μs | 303.9 μs | **24.2 μs** | 12.6x |
-| 18 | 1,044.0 μs | 326.1 μs | **25.7 μs** | 12.7x |
-| 19 | 0.6 μs | 0.4 μs | **0.2 μs** | 2.0x |
-| 20 | 67.5 μs | 18.5 μs | **11.6 μs** | 1.6x |
-| 21 | 52.6 μs | 53.4 μs | **23.2 μs** | 2.3x |
-| 22 | 2,786.5 μs | 1,844.2 μs | **73.8 μs** | 25.0x |
-| 23 | 125.7 μs | 93.1 μs | **17.5 μs** | 5.3x |
-| 24 | 4,798.3 μs | 3,646.6 μs | **1,911.1 μs** | 1.9x |
-| 25 | 264.7 μs | 164.9 μs | **9.2 μs** | 17.9x |
-| **Total** | **50,331.6 μs** | **58,894.6 μs** | **5,480.3 μs** | **10.7x** |
-
-Overall: **9.2x faster** than the original x86 code under Rosetta and **10.7x faster** than the original built natively for arm64.
-
-Correctness: every day is checked against the original code's answers on 205 public puzzle inputs from ~27 people (`./verify.sh`), plus randomized fuzz inputs for several days. Inputs are not committed. One bug in the original was found along the way: day 14 prints `1111111111` for Part 1 whenever the Part 2 answer is smaller than the input; the optimized version prints the correct value.
-
-Build and run: `./build.sh` then `build/bench all -q` (native), or `ARCH=x86 ./build.sh build/bench-x86` for the Rosetta build.
-
----
-
-# advent2018-fast
-
-[Advent of Code 2018](http://adventofcode.com/2018/) optimized C++ solutions.
-
-Here are the timings from an example run on an i7-7700K CPU overclocked at 4.60 GHz.  The total is greater than the sum of the individual days because of rounding.
-
-    Day  1       72 μs
-    Day  2       27 μs
-    Day  3      205 μs
-    Day  4       82 μs
-    Day  5      414 μs
-    Day  6    1,346 μs
-    Day  7        3 μs
-    Day  8       62 μs
-    Day  9    4,385 μs
-    Day 10       21 μs
-    Day 11      485 μs
-    Day 12       61 μs
-    Day 13      642 μs
-    Day 14   19,067 μs
-    Day 15    2,132 μs
-    Day 16       80 μs
-    Day 17      544 μs
-    Day 18      307 μs
-    Day 19        2 μs
-    Day 20       92 μs
-    Day 21      101 μs
-    Day 22    3,546 μs
-    Day 23      383 μs
-    Day 24    6,711 μs
-    Day 25      177 μs
-    ------------------
-    Total    40,959 μs
-
-Solutions should work with any puzzle input, provided it is byte-for-byte an exact copy of the file downloaded from Advent of Code.  When an input is given as a number inline with the puzzle text (days 11 and 14), the input file should contain only the number itself followed by a single line feed character (ASCII 12).
-
-This code makes extensive use of SIMD techniques and requires a CPU that supports the AVX2 instruction set.
-
-# Summary of solutions
-
-Here are a few brief notes about each solution.
-
-## Day 1
-
-See [this post](https://www.reddit.com/r/adventofcode/comments/a20646/2018_day_1_solutions/eaukxu5) on the subreddit.
-
-## Day 2
-
-Each 26-character word fits in a 32-byte AVX2 register, which allows for very fast comparisons.  Exploits regularities in the input to eliminate many candidate words from consideration.
-
-## Day 3
-
-Represents a row of fabric as a 1024-bit mask (16 64-bit integers.)  Scans the fabric vertically one row at a time using a sweep-line algorithm, considering only those claims which intersect the current row, 20-25 claims on average.
-
-## Day 4
-
-SIMD solution that stores the 60 minutes of the hour in two 32x8 bit AVX2 vectors.
-
-## Day 5
-
-Straightforward stack-based solution.  Tried various ways to prune the Part 2 search, but the added bookkeeping outweighed the time saved.
-
-## Day 6
-
-Part 1 is a basic flood fill; part 2 is a sweep-line algorithm that traces the outline of the "safe" region.
-
-## Day 7
-
-A SIMD take on topological sorting.  The letters A-Z fit nicely within a 32x8 AVX2 vector.
-
-## Day 8
-
-Straightforward recursive solution.
-
-## Day 9
-
-A shuffle/permute heavy SIMD implementation of the marble game's rules, in 23-turn increments.  Only needs to fully simulate ~43% of the game; the score for the remainder of the game can be found by tallying up every 16th marble in the array.
-
-## Day 10
-
-Calculates Part 2 based on the fastest-moving particles in the y-direction.  The final position of each star is added to a bitmap of eight 64-bit integers (each letter is 6x10.)  The resulting values are converted to letters by hashtable lookup.
-
-## Day 11
-
-Builds an integral image (summed area table) of the 300x300 area, and does so in a way that the compiler can vectorize.  Searching for the solutions is done via explicit SIMD.  Stops the search at "6 sigmas" of confidence.
-
-## Day 12
-
-Live/dead cells are stored as a bool vector, which C++ implements as a bitset.  Comparing the previous and current states is very fast; my input stabilizes at a vector length of 190, which is only 3 64-bit integers.  The rules are stored as a single 32-bit integer, and are evaluated by iterating over the current state with a 5-bit rolling window, which is used to index individual bits in the rules integer.
-
-## Day 13
-
-Fairly straightforward simulation of the minecarts.
-
-## Day 14
-
-This was the hardest puzzle to optimize.  The irregular write pattern limits the ability to vectorize the loop.  See [this post](https://www.reddit.com/r/adventofcode/comments/a6wpwa/2018_day_14_breaking_the_1_billion_recipes_per/) for a detailed description.
-
-## Day 15
-
-The 32x32 map fits in four 256-bit AVX2 registers when treated as a bitmap.  This makes for quick pathfinding by bitwise flood fill.  The map is split into three 1024-bit overlays: open space, elves, and goblins.
-
-## Day 16
-
-Mostly straightforward, using bit fields to keep track of which opcodes are valid for which instructions.
-
-## Day 17
-
-Recursively traces where the water flows.  I didn't spend much time trying to optimizing this; it is mostly just a copy/paste from my original solution repository.
-
-## Day 18
-
-A SIMD bonanza, even when "parsing" the input (which just does a SIMD bitwise AND with `0x11` on 32 input characters at a time to produce `0x00` for open space, `0x10` for trees, and `0x01` for lumberyards.)  This is actually a SIMD/SWAR hybrid, because the trees and lumberyards each occupy 4-bit fields within each 8-bit field of the 32-byte AVX2 register.
-
-## Day 19
-
-Executes instructions until it reaches the main loop.  Uses wheel factorization to find the prime factors, which are used to compute the divisor sum.
-
-## Day 20
-
-Exploits how the input was generated to solve both parts using a small stack of coordinate/distance and an even smaller cache of recently visited coordinates.
-
-## Day 21
-
-Reads only one number from the input (the only one that matters), and uses it as input to an optimized SIMD version of the generator.  Uses Brent's cycle-detection algorithm to solve Part 2.
-
-## Day 22
-
-Very minimalistic A\* using a 17-bucket priority queue.  Tool switching is done by bitwise arithmetic between tool and terrain.
-
-## Day 23
-
-See [this discussion](https://www.reddit.com/r/adventofcode/comments/a9co1u/day_23_part_2_adversarial_input_for_recursive/ecmpxad) on the subreddit.
-
-## Day 24
-
-Predetermines which groups are valid targets of each other, keeping a separate list of targets that are weak to the attack type.  These lists are stored as bitmasks.  Avoids sorting the array of attackers each round; instead, when a group is damaged, it bubbles down the target-selection list (they rarely move more than 1-2 slots at a time, if any.)  Otherwise, this is just a straight simulation of the battles.
-
-## Day 25
-
-Union-find algorithm, in cooperation with SIMD pairwise comparisons between each of the points.
+# advent2018-fast: agent speed-up benchmark
+
+A testbed for comparing AI coding agents on the same task: take an already heavily optimized set of
+[Advent of Code 2018](https://adventofcode.com/2018) solutions, [Voltara/advent2018-fast](https://github.com/Voltara/advent2018-fast),
+and make them faster. Each agent works in its own folder, in its own way. Everyone is benchmarked with the same harness and checked against the same answers.
+
+## Layout
+
+| Folder | What it is |
+|---|---|
+| `original/` | The starting point: Voltara's AVX2 C++ code, plus minimal fixes so it compiles with modern clang and runs natively on arm64 via [SIMDe](https://github.com/simd-everywhere/simde). Its `README.md` is the upstream one with notes on each day. |
+| `opus-5.5/` | Claude Opus 5.5's optimized solutions (one subagent per day). See `opus-5.5/NOTES.md`. |
+| `shared/` | Benchmark harness, build/verify/bench scripts, agent prompt template, and `results/`, one TSV per solution. |
+
+## Results
+
+<!-- results:start -->
+| Day | `original-x86` | `original` | `opus-5.5` |
+|----:|---:|---:|---:|
+| 1 | 14.0 μs | 11.8 μs | **2.5 μs (4.7x)** |
+| 2 | 13.0 μs | 8.7 μs | **1.5 μs (5.8x)** |
+| 3 | 85.3 μs | 54.2 μs | **29.3 μs (1.8x)** |
+| 4 | 30.4 μs | 24.3 μs | **2.1 μs (11.6x)** |
+| 5 | 256.4 μs | 217.3 μs | **28.9 μs (7.5x)** |
+| 6 | 415.2 μs | 365.6 μs | **5.6 μs (65.3x)** |
+| 7 | 0.9 μs | 0.4 μs | **0.2 μs (2.0x)** |
+| 8 | 26.1 μs | 22.0 μs | **6.2 μs (3.5x)** |
+| 9 | 1.20 ms | 1.80 ms | **277.5 μs (6.5x)** |
+| 10 | 13.6 μs | 8.2 μs | **0.8 μs (10.2x)** |
+| 11 | 1.01 ms | 602.9 μs | **121.2 μs (5.0x)** |
+| 12 | 42.3 μs | 38.0 μs | **2.3 μs (16.5x)** |
+| 13 | 192.6 μs | 190.5 μs | **37.1 μs (5.1x)** |
+| 14 | 29.58 ms | 45.90 ms | **2.30 ms (19.9x)** |
+| 15 | 6.44 ms | 1.81 ms | **594.1 μs (3.0x)** |
+| 16 | 44.0 μs | 35.7 μs | **4.2 μs (8.5x)** |
+| 17 | 519.8 μs | 305.8 μs | **24.1 μs (12.7x)** |
+| 18 | 1.05 ms | 334.1 μs | **25.4 μs (13.2x)** |
+| 19 | 0.6 μs | 0.4 μs | **0.2 μs (2.0x)** |
+| 20 | 69.1 μs | 18.8 μs | **11.6 μs (1.6x)** |
+| 21 | 52.8 μs | 53.5 μs | **23.8 μs (2.2x)** |
+| 22 | 2.75 ms | 1.85 ms | **74.0 μs (25.0x)** |
+| 23 | 126.4 μs | 94.9 μs | **19.5 μs (4.9x)** |
+| 24 | 4.70 ms | 3.72 ms | **1.91 ms (1.9x)** |
+| 25 | 256.3 μs | 165.2 μs | **10.2 μs (16.2x)** |
+| **Total** | **48.88 ms** | **57.63 ms** | **5.51 ms (10.5x)** |
+
+Min time per day, single-threaded. Speedups are vs `original` (native arm64). Bold = fastest per day. Machine: Apple M4 Max, macOS 26.7.1.
+<!-- results:end -->
+
+## Testing a new agent
+
+```bash
+shared/new-solution.sh my-agent        # copies original/src into my-agent/src
+# give the agent shared/AGENT_PROMPT.md with <name> = my-agent, let it work
+shared/verify.sh my-agent              # must print ALL PASS
+shared/bench.sh my-agent               # writes shared/results/my-agent.tsv (run on an idle machine)
+shared/compare.py --readme             # regenerates the table above
+```
+
+## Setup
+
+Requires macOS clang, plus `brew install boost simde`. The x86 baseline (`shared/bench.sh original --x86`) needs Rosetta 2.
+
+Puzzle inputs are not committed, because AoC asks people not to redistribute them. To recreate them:
+
+```bash
+git clone --depth 1 https://github.com/badouralix/adventofcode-2018 /tmp/aoc2018-inputs
+shared/make_tests.sh /tmp/aoc2018-inputs          # 205 inputs from ~27 people + the original's answers
+for d in $(seq -w 1 25); do cp shared/tests/day$d/evqna.txt shared/input/day$d.txt 2>/dev/null; done
+cp shared/tests/day10/ayoub.txt shared/input/day10.txt   # evqna has no day 10
+```
+
+`shared/input/dayNN.txt` is the benchmark input; `shared/tests/` holds the correctness inputs. Every input is normalized to end with a newline, as real AoC downloads do.
+
+## Rules for solutions
+
+Single-threaded, output identical to the original's, a general solution for any valid input (no hardcoded answers or precomputed simulation),
+and all work done inside each `dayNN()` call. Full rules are in `shared/AGENT_PROMPT.md`.
