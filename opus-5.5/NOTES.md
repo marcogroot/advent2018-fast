@@ -4,6 +4,48 @@ Agent/model: Claude Opus 5.5 (`claude-opus-5-5`), one subagent per day, orchestr
 Date: 2026-10-13
 Machine: Apple M4 Max
 
+## Time taken
+
+| | |
+|---|---|
+| Setup (fork, ARM build, harness, correctness tests) | ~6 min (fork created 13:35, agents launched 13:42), done by the orchestrating session |
+| Agents running (first launched to last finished) | **~29 min** wall clock (13:42 → 14:11), up to 20 agents at a time |
+| **Fork to all 25 days done** | **~36 min** (13:35 → 14:11 AEDT, 13 Oct 2026) |
+| Total agent time (sum of all 25 agents) | 5.2 h |
+| Total agent tokens | 3,277,082 |
+| Final verify + benchmark | ~2 min |
+
+Per-day agent stats (from each subagent's completion report):
+
+| Day | Agent time | Tokens | Tool calls |
+|----:|---:|---:|---:|
+| 1 | 5m 51s | 87,179 | 22 |
+| 2 | 9m 50s | 115,468 | 43 |
+| 3 | 12m 58s | 137,844 | 44 |
+| 4 | 8m 18s | 109,120 | 42 |
+| 5 | 7m 56s | 99,669 | 32 |
+| 6 | 14m 36s | 158,970 | 42 |
+| 7 | 16m 47s | 152,123 | 58 |
+| 8 | 3m 13s | 69,243 | 15 |
+| 9 | 13m 16s | 132,610 | 33 |
+| 10 | 7m 56s | 117,627 | 35 |
+| 11 | 5m 48s | 87,698 | 19 |
+| 12 | 9m 19s | 96,939 | 27 |
+| 13 | 13m 29s | 129,593 | 42 |
+| 14 | 23m 48s | 199,666 | 78 |
+| 15 | 11m 18s | 123,075 | 31 |
+| 16 | 16m 18s | 167,091 | 75 |
+| 17 | 9m 17s | 112,822 | 43 |
+| 18 | 12m 54s | 140,055 | 36 |
+| 19 | 10m 19s | 111,967 | 31 |
+| 20 | 21m 08s | 185,892 | 54 |
+| 21 | 11m 10s | 113,923 | 34 |
+| 22 | 22m 27s | 180,348 | 63 |
+| 23 | 16m 05s | 159,466 | 60 |
+| 24 | 12m 53s | 131,400 | 46 |
+| 25 | 15m 05s | 157,294 | 62 |
+| **Total** | **312m 02s** | **3,277,082** | **1067** |
+
 ## Per-day notes
 
 - **Day 1:** Hash table grouping prefix sums by remainder replaces two `std::sort`s; two-pass NEON newline scan + branch-free line parse.

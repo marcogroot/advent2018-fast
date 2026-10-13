@@ -14,6 +14,11 @@ cat > "$ROOT/$NAME/NOTES.md" <<NOTES
 Agent/model: 
 Date: $(date +%Y-%m-%d)
 
+## Time taken
+
+Wall clock (start to last day done): 
+Total agent time / tokens (if known): 
+
 ## Per-day notes
 
 NOTES

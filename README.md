@@ -9,7 +9,7 @@ and make them faster. Each agent works in its own folder, in its own way. Everyo
 | Folder | What it is |
 |---|---|
 | `original/` | The starting point: Voltara's AVX2 C++ code, plus minimal fixes so it compiles with modern clang and runs natively on arm64 via [SIMDe](https://github.com/simd-everywhere/simde). Its `README.md` is the upstream one with notes on each day. |
-| `opus-5.5/` | Claude Opus 5.5's optimized solutions (one subagent per day). See `opus-5.5/NOTES.md`. |
+| `opus-5.5/` | Claude Opus 5.5's optimized solutions: 25 subagents (one per day), ~36 min wall clock from fork to all days done (~29 min of agent work), 5.2 agent-hours, 3.3M tokens. See `opus-5.5/NOTES.md` for per-day approaches and timings. |
 | `shared/` | Benchmark harness, build/verify/bench scripts, agent prompt template, and `results/`, one TSV per solution. |
 
 ## Results
