@@ -1,3 +1,45 @@
+# advent2018-fast (Apple M4 Max experiment)
+
+Experimenting with **Claude Opus 5.5** to speed up an already heavily optimized repo: [Voltara/advent2018-fast](https://github.com/Voltara/advent2018-fast).
+The original is AVX2 C++ for x86. This fork builds it natively on arm64 (via SIMDe as a baseline), then has one agent per day rewrite each solution for the M4 Max.
+
+## Comparison (Apple M4 Max, single-threaded, min over many runs)
+
+| Day | Original x86 (Rosetta) | Original native arm64 (SIMDe) | Optimized (Opus 5.5) |
+|----:|-----------------------:|------------------------------:|---------------------:|
+|  1 |     15.3 μs |     11.8 μs | _pending_ |
+|  2 |     14.0 μs |      9.0 μs | _pending_ |
+|  3 |     90.4 μs |     60.1 μs | _pending_ |
+|  4 |     33.3 μs |     24.9 μs | _pending_ |
+|  5 |    267.2 μs |    244.0 μs | _pending_ |
+|  6 |    475.0 μs |    423.7 μs | _pending_ |
+|  7 |      0.9 μs |      0.5 μs | _pending_ |
+|  8 |     29.1 μs |     24.0 μs | _pending_ |
+|  9 |  1,205.9 μs |  1,837.8 μs | _pending_ |
+| 10 |     13.8 μs |      8.2 μs | _pending_ |
+| 11 |  1,014.5 μs |    587.1 μs | _pending_ |
+| 12 |     42.2 μs |     39.4 μs | _pending_ |
+| 13 |    214.0 μs |    200.8 μs | _pending_ |
+| 14 | 30,187.7 μs | 48,060.5 μs | _pending_ |
+| 15 |  6,393.8 μs |  1,814.2 μs | _pending_ |
+| 16 |     43.2 μs |     35.3 μs | _pending_ |
+| 17 |    526.8 μs |    308.2 μs | _pending_ |
+| 18 |  1,032.9 μs |    345.8 μs | _pending_ |
+| 19 |      0.6 μs |      0.4 μs | _pending_ |
+| 20 |     87.2 μs |     19.2 μs | _pending_ |
+| 21 |     52.7 μs |     54.7 μs | _pending_ |
+| 22 |  2,759.5 μs |  1,864.3 μs | _pending_ |
+| 23 |    136.4 μs |     98.8 μs | _pending_ |
+| 24 |  2,470.1 μs |  1,852.3 μs | _pending_ |
+| 25 |    252.8 μs |    180.5 μs | _pending_ |
+| **Total** | **47,359.5 μs** | **58,105.7 μs** | _pending_ |
+
+Correctness: every day is checked against the original code's answers on 204 public puzzle inputs from ~27 people (`./verify.sh`). Inputs are not committed.
+
+Build and run: `./build.sh` then `build/bench all -q` (native), or `ARCH=x86 ./build.sh build/bench-x86` for the Rosetta build.
+
+---
+
 # advent2018-fast
 
 [Advent of Code 2018](http://adventofcode.com/2018/) optimized C++ solutions.
